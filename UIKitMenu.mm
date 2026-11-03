@@ -342,22 +342,36 @@ static UIKitMenu *_shared;
 // on ESP target resolution only, and populate our own list via IL2CPP here
 // would require the same Il2cpp.h APIs. Simplest safe bridge: re-declare
 // the same enumeration using the project's existing IL2CPP/Il2cppR.h APIs.
-
 - (void)syncVectorsFromNative {
     uk_assemblies.clear();
     uk_classes.clear();
-    void *domain = il2cpp_domain_get();
+
+    const void *domain = IL2Cpp::il2cpp_domain_get();
     if (!domain) return;
+
     size_t count = 0;
-    void **assemblies = il2cpp_domain_get_assemblies(domain, &count);
+    void **assemblies =
+        IL2Cpp::il2cpp_domain_get_assemblies(domain, &count);
+
     for (size_t i = 0; i < count; i++) {
-        void *image = il2cpp_assembly_get_image(assemblies[i]);
-        const char *name = il2cpp_image_get_name(image);
-        if (name) uk_assemblies.push_back(name);
+        const void *image =
+            IL2Cpp::il2cpp_assembly_get_image(assemblies[i]);
+
+        const char *name =
+            IL2Cpp::il2cpp_image_get_name(const_cast<void *>(image));
+
+        if (name) {
+            uk_assemblies.push_back(name);
+        }
     }
-    if (uk_assemblyIdx < 0 && !uk_assemblies.empty()) uk_assemblyIdx = 0;
+
+    if (uk_assemblyIdx < 0 && !uk_assemblies.empty()) {
+        uk_assemblyIdx = 0;
+    }
+
     [self.asmRow refreshValue];
 }
+
 
 - (void)pickAssembly {
     UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Select Assembly" message:nil
