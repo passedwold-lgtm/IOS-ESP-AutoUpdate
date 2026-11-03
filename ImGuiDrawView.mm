@@ -1,5 +1,6 @@
 #import "Esp/ImGuiDrawView.h"
 #import "Init/IL2CPPInit.h"
+#import "UIKitMenu.h"
 #import <Metal/Metal.h>
 #import <MetalKit/MetalKit.h>
 #import <Foundation/Foundation.h>
@@ -76,12 +77,14 @@ ImFont* verdana_smol;
 static void* selectedCamera = nullptr;
 static bool espInitialized = false;
 
-static bool esp_line = false;
-static bool esp_distance_enabled = false;
-static bool esp_skeleton = false;
-static bool esp_box_2d = false;
-static bool esp_box_3d = false;
-static bool esp_corners = false;
+// Non-static: UIKitMenu.mm (separate TU) needs extern access to these.
+bool esp_enabled = false;
+bool esp_line = false;
+bool esp_distance_enabled = false;
+bool esp_skeleton = false;
+bool esp_box_2d = false;
+bool esp_box_3d = false;
+bool esp_corners = false;
 static int esp_line_position = 0;
 static float ui_scale = 0.70f;
 
@@ -375,7 +378,7 @@ static bool show_s0 = false;
 
 
 
-static bool MenDeal = true;
+bool MenDeal = true; // non-static: UIKitMenu.mm references via extern
 
 
 - (instancetype)initWithNibName:(nullable NSString *)nibNameOrNil bundle:(nullable NSBundle *)nibBundleOrNil
@@ -454,6 +457,10 @@ static bool MenDeal = true;
 + (void)showChange:(BOOL)open
 {
     MenDeal = open;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (open) [[UIKitMenu shared] show];
+        else      [[UIKitMenu shared] hide];
+    });
 }
 
 - (MTKView *)mtkView
@@ -526,7 +533,8 @@ static bool MenDeal = true;
 - (void)toggleMenu {
     MenDeal = !MenDeal;
     NSLog(@"[GF] Toggle Menu - MenDeal is now: %d", MenDeal);
-    
+    [[UIKitMenu shared] toggle];
+
     // Ensure button stays on top and interactive
     [self.view bringSubviewToFront:self.toggleMenuButton];
     self.toggleMenuButton.userInteractionEnabled = YES;
@@ -659,13 +667,11 @@ static bool MenDeal = true;
     io.DeltaTime = 1 / float(view.preferredFramesPerSecond ?: 120);
     
     id<MTLCommandBuffer> commandBuffer = [self.commandQueue commandBuffer];
-    
 
-    static bool esp_enabled = false;
-    static bool esp_box_2d = false;
-    static bool esp_box_3d = false;
-    static bool esp_corners = false;
-    
+    // NOTE: esp_box_2d/3d/corners are now the FILE-SCOPE globals declared
+    // above (non-static) — the old local `static bool esp_box_2d` etc. that
+    // used to shadow them here has been removed so UIKitMenu's writes via
+    // updateESPVariables() actually reach drawPlayerRootESP().
         
         if ([IL2CPPInit isInitializationComplete]) {
             [self.view setUserInteractionEnabled:YES];
@@ -698,7 +704,9 @@ static bool MenDeal = true;
             ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
             ImGui::SetNextWindowSize(ImVec2(400, 300), ImGuiCond_FirstUseEver);
             
-            if (MenDeal == true && [IL2CPPInit isInitializationComplete])
+            // ImGui menu window disabled — UIKitMenu.mm now draws the UI.
+            // ESP overlay drawing below (drawPlayerRootESP) still runs every frame.
+            if (false && MenDeal == true && [IL2CPPInit isInitializationComplete])
             {            
                 // Set font scale to user preference for the main menu content
                 if (font) font->Scale = ui_scale;
