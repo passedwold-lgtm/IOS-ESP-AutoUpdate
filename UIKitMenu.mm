@@ -4,20 +4,13 @@
 #include <string>
 #include <vector>
 
-// ── These globals/functions already exist in ImGuiDrawView.mm — same TU is
-//    NOT shared, so this file must declare its own extern copies that point
-//    at the SAME symbols (they are non-static / exported from that file). ──
-extern bool esp_line;
-extern bool esp_distance_enabled;
-extern bool esp_skeleton;
-extern bool esp_box_2d;
-extern bool esp_box_3d;
-extern bool esp_corners;
-extern bool MenDeal;
+// ── Symbols that live in ImGuiDrawView.mm. Declared WEAK so that if they are
+//    missing / static / mangled differently, the dylib still loads and we skip
+//    the call instead of crashing with "symbol not found". ──
 extern void updateESPVariables(bool line, bool distance, bool skeleton, int linePos,
-                                bool box2d, bool box3d, bool corners);
-extern void UpdateAssemblies();
-extern void UpdateClasses(const std::string &assemblyName);
+                                bool box2d, bool box3d, bool corners) __attribute__((weak_import));
+extern void UpdateAssemblies() __attribute__((weak_import));
+extern void UpdateClasses(const std::string &assemblyName) __attribute__((weak_import));
 
 // NOTE: esp_enabled / esp_line_position / assembly+class selection are
 // `static` inside ImGuiDrawView.mm's drawInMTKView — not reachable from here.
@@ -37,6 +30,7 @@ static std::vector<std::string> uk_assemblies;
 static std::vector<std::string> uk_classes;
 
 static void uk_push() {
+    if (!updateESPVariables) return;
     updateESPVariables(uk_espLine, uk_espDistance, uk_espSkeleton, uk_lineIdx,
                         uk_espBox && uk_boxIdx==0, uk_espBox && uk_boxIdx==1, uk_espBox && uk_boxIdx==2);
 }
@@ -106,10 +100,13 @@ typedef void(^ComboH)(NSInteger);
 @interface UKComboRow : UIView
 - (instancetype)initWithOptions:(NSArray<NSString*>*)opts idx:(NSInteger)idx width:(CGFloat)w handler:(ComboH)h;
 @end
-@implementation UKComboRow
+@implementation UKComboRow {
+    ComboH _h;
+}
 - (instancetype)initWithOptions:(NSArray<NSString*>*)opts idx:(NSInteger)idx width:(CGFloat)w handler:(ComboH)h {
     self = [super initWithFrame:CGRectMake(0,0,w,40)];
     if (!self) return nil;
+    _h = [h copy];
     self.backgroundColor = MK_ROW();
     self.layer.cornerRadius = 20;
     self.layer.masksToBounds = YES;
@@ -124,8 +121,6 @@ typedef void(^ComboH)(NSInteger);
         [b setTitleColor:sel?[UIColor whiteColor]:MK_DIM() forState:UIControlStateNormal];
         b.titleLabel.font = [UIFont systemFontOfSize:12 weight:sel?UIFontWeightBold:UIFontWeightRegular];
         b.tag = i;
-        objc_setAssociatedObject(b, "h", h, OBJC_ASSOCIATION_COPY_NONATOMIC);
-        objc_setAssociatedObject(b, "row", self, OBJC_ASSOCIATION_ASSIGN);
         [b addTarget:self action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
         [self addSubview:b];
     }
@@ -138,8 +133,7 @@ typedef void(^ComboH)(NSInteger);
         b.backgroundColor = sel?MK_ACCENT():[UIColor clearColor];
         [b setTitleColor:sel?[UIColor whiteColor]:MK_DIM() forState:UIControlStateNormal];
     }
-    ComboH h = objc_getAssociatedObject(s, "h");
-    if (h) h(s.tag);
+    if (_h) _h(s.tag);
 }
 @end
 
@@ -212,6 +206,12 @@ static UILabel *mkSection(NSString *t, CGFloat w) {
 
 static UIKitMenu *_shared;
 + (instancetype)shared {
+    // UIKit objects MUST be created on the main thread
+    if (![NSThread isMainThread]) {
+        __block UIKitMenu *m = nil;
+        dispatch_sync(dispatch_get_main_queue(), ^{ m = [UIKitMenu shared]; });
+        return m;
+    }
     static dispatch_once_t once;
     dispatch_once(&once, ^{ _shared = [[UIKitMenu alloc] init]; });
     return _shared;
@@ -279,10 +279,11 @@ static UIKitMenu *_shared;
 
 - (void)populate {
     CGFloat y = 12, w = kW-kPad*2;
+    __weak UIKitMenu *ws = self;
 
     y = [self addView:mkSection(@"ESP", w) y:y];
     y = [self addView:[[UKBoolRow alloc] initWithTitle:@"Enable ESP" on:uk_espEnabled width:w
-        handler:^(BOOL v){ uk_espEnabled = v; extern bool esp_line_dummy; }] y:y];
+        handler:^(BOOL v){ uk_espEnabled = v; }] y:y];
 
     // Since esp_enabled is static inside ImGuiDrawView.mm and not reachable,
     // we instead drive visibility of ESP by toggling esp_line/box/etc via
@@ -293,13 +294,13 @@ static UIKitMenu *_shared;
     self.asmRow = [[UKDropdownRow alloc] initWithTitle:@"Assembly" valueGetter:^NSString*{
         return (uk_assemblyIdx>=0 && uk_assemblyIdx<(int)uk_assemblies.size())
             ? [NSString stringWithUTF8String:uk_assemblies[uk_assemblyIdx].c_str()] : @"Select...";
-    } width:w tapHandler:^{ [self pickAssembly]; }];
+    } width:w tapHandler:^{ [ws pickAssembly]; }];
     y = [self addView:self.asmRow y:y];
 
     self.clsRow = [[UKDropdownRow alloc] initWithTitle:@"Class" valueGetter:^NSString*{
         return (uk_classIdx>=0 && uk_classIdx<(int)uk_classes.size())
             ? [NSString stringWithUTF8String:uk_classes[uk_classIdx].c_str()] : @"Select...";
-    } width:w tapHandler:^{ [self pickClass]; }];
+    } width:w tapHandler:^{ [ws pickClass]; }];
     y = [self addView:self.clsRow y:y];
 
     y += 4;
@@ -329,10 +330,9 @@ static UIKitMenu *_shared;
     y = [self addView:credit y:y];
 
     self.scroll.contentSize = CGSizeMake(kW, y+16);
-
-    // First load — populate assembly list
-    UpdateAssemblies();
-    [self syncVectorsFromNative];
+    // NOTE: IL2CPP is NOT touched here any more. Calling it while the menu is
+    // being created (game may not have initialised il2cpp yet) was a crash source.
+    // The assembly list is loaded lazily when the user taps the Assembly row.
 }
 
 // Pull the C++ vectors (owned by ImGuiDrawView.mm) is not possible directly
@@ -346,74 +346,92 @@ static UIKitMenu *_shared;
     uk_assemblies.clear();
     uk_classes.clear();
 
+    if (UpdateAssemblies) UpdateAssemblies();
+
     const void *domain = IL2Cpp::il2cpp_domain_get();
-    if (!domain) return;
+    if (!domain) return;                       // il2cpp not ready yet
 
     size_t count = 0;
-    void **assemblies =
-        IL2Cpp::il2cpp_domain_get_assemblies(domain, &count);
+    void **assemblies = IL2Cpp::il2cpp_domain_get_assemblies(domain, &count);
+    if (!assemblies || count == 0) return;
 
     for (size_t i = 0; i < count; i++) {
-        const void *image =
-            IL2Cpp::il2cpp_assembly_get_image(assemblies[i]);
-
-        const char *name =
-            IL2Cpp::il2cpp_image_get_name(const_cast<void *>(image));
-
-        if (name) {
-            uk_assemblies.push_back(name);
-        }
+        if (!assemblies[i]) continue;
+        const void *image = IL2Cpp::il2cpp_assembly_get_image(assemblies[i]);
+        if (!image) continue;
+        const char *name = IL2Cpp::il2cpp_image_get_name(const_cast<void *>(image));
+        if (name) uk_assemblies.push_back(name);
     }
 
-    if (uk_assemblyIdx < 0 && !uk_assemblies.empty()) {
-        uk_assemblyIdx = 0;
-    }
-
+    if (uk_assemblyIdx < 0 && !uk_assemblies.empty()) uk_assemblyIdx = 0;
     [self.asmRow refreshValue];
 }
 
+static UIViewController *uk_topVC() {
+    UIWindow *win = nil;
+    for (UIWindow *c in [UIApplication sharedApplication].windows) {
+        if (c.isKeyWindow) { win = c; break; }
+    }
+    if (!win) win = [UIApplication sharedApplication].windows.firstObject;
+    UIViewController *vc = win.rootViewController;
+    while (vc.presentedViewController) vc = vc.presentedViewController; // avoid "already presenting" crash
+    return vc;
+}
+
+- (void)presentSheet:(UIAlertController *)ac from:(UIView *)row {
+    UIViewController *top = uk_topVC();
+    if (!top) return;
+    if (ac.popoverPresentationController) {   // iPad needs a source or it crashes
+        ac.popoverPresentationController.sourceView = self;
+        ac.popoverPresentationController.sourceRect = [self convertRect:row.bounds fromView:row];
+    }
+    [top presentViewController:ac animated:YES completion:nil];
+}
 
 - (void)pickAssembly {
+    if (uk_assemblies.empty()) [self syncVectorsFromNative];   // lazy load
+    if (uk_assemblies.empty()) {
+        UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"IL2CPP not ready"
+            message:@"Enter the game first, then try again." preferredStyle:UIAlertControllerStyleAlert];
+        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+        UIViewController *top = uk_topVC();
+        if (top) [top presentViewController:ac animated:YES completion:nil];
+        return;
+    }
+    __weak UIKitMenu *ws = self;
     UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Select Assembly" message:nil
         preferredStyle:UIAlertControllerStyleActionSheet];
-    for (size_t i=0;i<uk_assemblies.size();i++) {
-        NSString *name = [NSString stringWithUTF8String:uk_assemblies[i].c_str()];
-        [ac addAction:[UIAlertAction actionWithTitle:name style:UIAlertActionStyleDefault
+    for (size_t i = 0; i < uk_assemblies.size(); i++) {
+        std::string asmName = uk_assemblies[i];            // copy, don't index the global later
+        NSString *title = [NSString stringWithUTF8String:asmName.c_str()] ?: @"?";
+        [ac addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault
             handler:^(UIAlertAction *a){
                 uk_assemblyIdx = (int)i;
                 uk_classIdx = -1;
-                UpdateClasses(uk_assemblies[i]);
-                [self.asmRow refreshValue];
-                [self.clsRow refreshValue];
+                if (UpdateClasses) UpdateClasses(asmName);
+                [ws.asmRow refreshValue];
+                [ws.clsRow refreshValue];
             }]];
     }
     [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    UIViewController *root = [UIApplication sharedApplication].keyWindow.rootViewController;
-    if (ac.popoverPresentationController) {
-        ac.popoverPresentationController.sourceView = self;
-        ac.popoverPresentationController.sourceRect = self.asmRow.frame;
-    }
-    [root presentViewController:ac animated:YES completion:nil];
+    [self presentSheet:ac from:self.asmRow];
 }
 
 - (void)pickClass {
+    if (uk_classes.empty()) return;   // nothing to show (see note in reply)
+    __weak UIKitMenu *ws = self;
     UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Select Class" message:nil
         preferredStyle:UIAlertControllerStyleActionSheet];
-    for (size_t i=0;i<uk_classes.size();i++) {
-        NSString *name = [NSString stringWithUTF8String:uk_classes[i].c_str()];
-        [ac addAction:[UIAlertAction actionWithTitle:name style:UIAlertActionStyleDefault
+    for (size_t i = 0; i < uk_classes.size(); i++) {
+        NSString *title = [NSString stringWithUTF8String:uk_classes[i].c_str()] ?: @"?";
+        [ac addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault
             handler:^(UIAlertAction *a){
                 uk_classIdx = (int)i;
-                [self.clsRow refreshValue];
+                [ws.clsRow refreshValue];
             }]];
     }
     [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    UIViewController *root = [UIApplication sharedApplication].keyWindow.rootViewController;
-    if (ac.popoverPresentationController) {
-        ac.popoverPresentationController.sourceView = self;
-        ac.popoverPresentationController.sourceRect = self.clsRow.frame;
-    }
-    [root presentViewController:ac animated:YES completion:nil];
+    [self presentSheet:ac from:self.clsRow];
 }
 
 - (void)handlePan:(UIPanGestureRecognizer *)g {
@@ -423,9 +441,10 @@ static UIKitMenu *_shared;
 }
 
 - (void)show {
+    if (![NSThread isMainThread]) { dispatch_async(dispatch_get_main_queue(), ^{ [self show]; }); return; }
     if (self.superview) { self.hidden = NO; [self.superview bringSubviewToFront:self]; return; }
-    UIWindow *w = [UIApplication sharedApplication].keyWindow ?: [UIApplication sharedApplication].windows.firstObject;
-    UIView *root = w.rootViewController.view;
+    UIViewController *rootVC = uk_topVC();
+    UIView *root = rootVC.view;
     if (!root) return;
     self.center = CGPointMake(root.bounds.size.width/2, root.bounds.size.height/2);
     [root addSubview:self];
@@ -434,10 +453,14 @@ static UIKitMenu *_shared;
         animations:^{ self.alpha=1; self.transform=CGAffineTransformIdentity; } completion:nil];
 }
 - (void)hide {
+    if (![NSThread isMainThread]) { dispatch_async(dispatch_get_main_queue(), ^{ [self hide]; }); return; }
     [UIView animateWithDuration:0.18 animations:^{
         self.alpha=0; self.transform=CGAffineTransformMakeScale(0.94,0.94);
     } completion:^(BOOL f){ self.hidden=YES; self.alpha=1; self.transform=CGAffineTransformIdentity; }];
 }
-- (void)toggle { (self.hidden||!self.superview) ? [self show] : [self hide]; }
+- (void)toggle {
+    if (![NSThread isMainThread]) { dispatch_async(dispatch_get_main_queue(), ^{ [self toggle]; }); return; }
+    (self.hidden || !self.superview) ? [self show] : [self hide];
+}
 
 @end
