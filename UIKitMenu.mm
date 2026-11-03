@@ -1,4 +1,5 @@
 #import "UIKitMenu.h"
+#include "IMGUI/Il2cpp.h"
 #import <objc/runtime.h>
 #include <string>
 #include <vector>
@@ -341,7 +342,7 @@ static UIKitMenu *_shared;
 // on ESP target resolution only, and populate our own list via IL2CPP here
 // would require the same Il2cpp.h APIs. Simplest safe bridge: re-declare
 // the same enumeration using the project's existing IL2CPP/Il2cppR.h APIs.
-#include "IMGUI/Il2cpp.h"
+
 - (void)syncVectorsFromNative {
     uk_assemblies.clear();
     uk_classes.clear();
