@@ -1,4 +1,3 @@
-THEOS_DEVICE_IP = 192.168.0.106 # install to device from pc
 ARCHS = arm64
 DEBUG = 0
 FINALPACKAGE = 1
@@ -22,8 +21,8 @@ ifeq ($(MOBILE_THEOS),1)
   $(info ===> Setting SYSROOT to $(SDK_PATH)...)
   SYSROOT = $(SDK_PATH)
 else
-  TARGET = iphone:clang:latest:14.0
-endif
+  TARGET = iphone:latest
+
 
 include $(THEOS)/makefiles/common.mk
 
@@ -36,7 +35,7 @@ $(TWEAK_NAME)_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unused-varia
 
 
 
-$(TWEAK_NAME)_FILES = ImGuiDrawView.mm $(wildcard Esp/*.mm) $(wildcard Esp/*.m) $(wildcard IMGUI/*.cpp) $(wildcard IMGUI/*.mm) $(wildcard Init/*.mm) $(wildcard IL2CPP/*.mm) $(wildcard Resources/Textures/Logo/*.mm)
+$(TWEAK_NAME)_FILES = ImGuiDrawView.mm UIKitMenu.mm $(wildcard Esp/*.mm) $(wildcard Esp/*.m) $(wildcard IMGUI/*.cpp) $(wildcard IMGUI/*.mm) $(wildcard Init/*.mm) $(wildcard IL2CPP/*.mm) $(wildcard Resources/Textures/Logo/*.mm)
 
 
 
@@ -44,5 +43,3 @@ $(TWEAK_NAME)_FILES = ImGuiDrawView.mm $(wildcard Esp/*.mm) $(wildcard Esp/*.m) 
 # GO_EASY_ON_ME = 1
 
 include $(THEOS_MAKE_PATH)/tweak.mk
-
-
